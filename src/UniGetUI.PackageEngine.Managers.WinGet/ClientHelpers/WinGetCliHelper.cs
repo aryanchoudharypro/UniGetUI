@@ -11,17 +11,15 @@ using UniGetUI.PackageEngine.PackageClasses;
 
 namespace UniGetUI.PackageEngine.Managers.WingetManager;
 
-internal sealed class BundledWinGetHelper : IWinGetManagerHelper
+internal sealed class WinGetCliHelper : IWinGetManagerHelper
 {
     private readonly WinGet Manager;
     private readonly string _cliExecutablePath;
 
-    public BundledWinGetHelper(WinGet manager, string? cliExecutablePath = null)
+    public WinGetCliHelper(WinGet manager, string cliExecutablePath)
     {
         Manager = manager;
-        _cliExecutablePath = string.IsNullOrWhiteSpace(cliExecutablePath)
-            ? WinGet.BundledWinGetPath
-            : cliExecutablePath;
+        _cliExecutablePath = cliExecutablePath;
     }
 
     public IReadOnlyList<Package> GetAvailableUpdates_UnSafe()

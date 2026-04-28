@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -53,35 +52,8 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
         public LocalWinGetSource MicrosoftStoreSource { get; }
         public static bool NO_PACKAGES_HAVE_BEEN_LOADED { get; private set; }
 
-        public static string BundledWinGetPath = "";
-
-        private static string GetBundledWinGetPath()
-        {
-            string folder = RuntimeInformation.ProcessArchitecture switch
-            {
-                System.Runtime.InteropServices.Architecture.Arm64 => "winget-cli_arm64",
-                System.Runtime.InteropServices.Architecture.X64 => "winget-cli_x64",
-                System.Runtime.InteropServices.Architecture.X86 => "winget-cli_x86",
-                _ => "winget-cli_x64",
-            };
-
-            var path = Path.Join(CoreData.UniGetUIExecutableDirectory, folder, "winget.exe");
-            if (!File.Exists(path) && folder != "winget-cli_x64")
-            {
-                path = Path.Join(
-                    CoreData.UniGetUIExecutableDirectory,
-                    "winget-cli_x64",
-                    "winget.exe"
-                );
-            }
-
-            return path;
-        }
-
         public WinGet()
         {
-            BundledWinGetPath = GetBundledWinGetPath();
-
             Capabilities = new ManagerCapabilities
             {
                 CanRunAsAdmin = true,
@@ -282,14 +254,7 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
 
         public override IReadOnlyList<string> FindCandidateExecutableFiles()
         {
-            List<string> candidates = new();
-            if (!Settings.Get(Settings.K.ForceLegacyBundledWinGet))
-            {
-                candidates.AddRange(CoreTools.WhichMultiple("winget.exe"));
-            }
-
-            candidates.Add(BundledWinGetPath);
-            return candidates;
+            return CoreTools.WhichMultiple("winget.exe");
         }
 
         protected override void _loadManagerExecutableFile(
@@ -298,31 +263,24 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
             out string callArguments
         )
         {
-            bool FORCE_BUNDLED = Settings.Get(Settings.K.ForceLegacyBundledWinGet);
             var (_found, _path) = GetExecutableFile();
-
-            if (_found && _path == BundledWinGetPath && !FORCE_BUNDLED)
-            {
-                Logger.Error("User does not have WinGet installed, forcing bundled WinGet...");
-                FORCE_BUNDLED = true;
-            }
-
             found = _found;
             path = _path;
             callArguments = "";
 
+            if (!found)
+            {
+                return;
+            }
+
             try
             {
-                if (FORCE_BUNDLED)
-                    WinGetHelper.Instance = new BundledWinGetHelper(this);
-                else
-                    WinGetHelper.Instance = new NativeWinGetHelper(this);
+                WinGetHelper.Instance = new NativeWinGetHelper(this);
             }
             catch (Exception ex)
             {
                 if (
-                    !FORCE_BUNDLED
-                    && ex is WinGetComActivationException activationEx
+                    ex is WinGetComActivationException activationEx
                     && activationEx.IsExpectedFallbackCondition
                 )
                 {
@@ -333,19 +291,19 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
                 else
                 {
                     Logger.Warn(
-                        $"Cannot instantiate {(FORCE_BUNDLED ? "Bundled" : "Native")} WinGet Helper due to error: {ex.Message}"
+                        $"Cannot instantiate Native WinGet Helper due to error: {ex.Message}"
                     );
                     Logger.Warn(ex);
                 }
 
-                Logger.Warn("WinGet will resort to using BundledWinGetHelper()");
-                WinGetHelper.Instance = new BundledWinGetHelper(this);
+                Logger.Warn("WinGet will resort to using WinGetCliHelper()");
+                WinGetHelper.Instance = new WinGetCliHelper(this, path);
             }
         }
 
         protected override void _loadManagerVersion(out string version)
         {
-            bool IS_BUNDLED = WinGetHelper.Instance is BundledWinGetHelper;
+            bool usesCliHelper = WinGetHelper.Instance is WinGetCliHelper;
 
             Process process = new()
             {
@@ -371,10 +329,10 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
             process.Start();
 
             version =
-                $"{(IS_BUNDLED ? "Bundled" : "System")} WinGet (CLI) Version: {process.StandardOutput.ReadToEnd().Trim()}";
+                $"System WinGet (CLI) Version: {process.StandardOutput.ReadToEnd().Trim()}";
 
-            if (IS_BUNDLED)
-                version += "\nUsing bundled WinGet helper (CLI parsing)";
+            if (usesCliHelper)
+                version += "\nUsing WinGet CLI helper (CLI parsing)";
             else
             {
                 version += "\nUsing Native WinGet helper (COM Api)";
