@@ -142,6 +142,47 @@ public sealed class WinGetManagerTests : IDisposable
     }
 
     [Fact]
+    public void FindCandidateExecutableFilesPrefersSystemWinGetBeforeBundledPinget()
+    {
+        const string systemWinGet = @"C:\WindowsApps\winget.exe";
+        const string bundledPinget = @"C:\Program Files\UniGetUI\pinget.exe";
+
+        var candidates = WinGet.FindCandidateExecutableFiles(
+            static executableName => executableName == "winget.exe" ? [systemWinGet] : [],
+            path => path == bundledPinget,
+            bundledPinget
+        );
+
+        Assert.Equal([systemWinGet, bundledPinget], candidates);
+    }
+
+    [Fact]
+    public void FindCandidateExecutableFilesUsesBundledPingetWhenSystemWinGetIsMissing()
+    {
+        const string bundledPinget = @"C:\Program Files\UniGetUI\pinget.exe";
+
+        var candidates = WinGet.FindCandidateExecutableFiles(
+            static _ => [],
+            path => path == bundledPinget,
+            bundledPinget
+        );
+
+        Assert.Equal([bundledPinget], candidates);
+    }
+
+    [Fact]
+    public void FindCandidateExecutableFilesReturnsEmptyWhenNoBackendExists()
+    {
+        var candidates = WinGet.FindCandidateExecutableFiles(
+            static _ => [],
+            static _ => false,
+            @"C:\Program Files\UniGetUI\pinget.exe"
+        );
+
+        Assert.Empty(candidates);
+    }
+
+    [Fact]
     public void NativeWinGetHelperUsesSystemCliFallbackForInstalledPackagesWhenCompositeCatalogFails()
     {
         var manager = new TestableWinGet();

@@ -51,6 +51,8 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
         public LocalWinGetSource GOGSource { get; }
         public LocalWinGetSource MicrosoftStoreSource { get; }
         public static bool NO_PACKAGES_HAVE_BEEN_LOADED { get; private set; }
+        internal WinGetCliBackendKind SelectedCliBackendKind { get; private set; } =
+            WinGetCliBackendKind.SystemWinGet;
 
         public WinGet()
         {
@@ -254,7 +256,38 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
 
         public override IReadOnlyList<string> FindCandidateExecutableFiles()
         {
-            return CoreTools.WhichMultiple("winget.exe");
+            return FindCandidateExecutableFiles(
+                executableName => CoreTools.WhichMultiple(executableName),
+                File.Exists,
+                GetBundledPingetExecutablePath()
+            );
+        }
+
+        internal static IReadOnlyList<string> FindCandidateExecutableFiles(
+            Func<string, IReadOnlyList<string>> findExecutables,
+            Func<string, bool> fileExists,
+            string bundledPingetPath
+        )
+        {
+            List<string> candidates = [.. findExecutables("winget.exe")];
+            if (fileExists(bundledPingetPath))
+            {
+                candidates.Add(bundledPingetPath);
+            }
+
+            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+
+        internal static string GetBundledPingetExecutablePath()
+        {
+            return Path.Join(CoreData.UniGetUIExecutableDirectory, "pinget.exe");
+        }
+
+        internal IWinGetManagerHelper CreateCliHelperForSelectedBackend()
+        {
+            return SelectedCliBackendKind == WinGetCliBackendKind.BundledPinget
+                ? new PingetCliHelper(this, Status.ExecutablePath)
+                : new WinGetCliHelper(this, Status.ExecutablePath);
         }
 
         protected override void _loadManagerExecutableFile(
@@ -270,6 +303,15 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
 
             if (!found)
             {
+                return;
+            }
+
+            SelectedCliBackendKind = GetBackendKind(path);
+
+            if (SelectedCliBackendKind == WinGetCliBackendKind.BundledPinget)
+            {
+                Logger.Warn("System WinGet was not found; using bundled Pinget CLI fallback.");
+                WinGetHelper.Instance = new PingetCliHelper(this, path);
                 return;
             }
 
@@ -297,13 +339,25 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
                 }
 
                 Logger.Warn("WinGet will resort to using WinGetCliHelper()");
-                WinGetHelper.Instance = new WinGetCliHelper(this, path);
+                WinGetHelper.Instance = CreateCliHelperForSelectedBackend();
             }
+        }
+
+        private static WinGetCliBackendKind GetBackendKind(string executablePath)
+        {
+            return Path.GetFullPath(executablePath)
+                    .Equals(
+                        Path.GetFullPath(GetBundledPingetExecutablePath()),
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                ? WinGetCliBackendKind.BundledPinget
+                : WinGetCliBackendKind.SystemWinGet;
         }
 
         protected override void _loadManagerVersion(out string version)
         {
             bool usesCliHelper = WinGetHelper.Instance is WinGetCliHelper;
+            bool usesPingetHelper = WinGetHelper.Instance is PingetCliHelper;
 
             Process process = new()
             {
@@ -328,10 +382,14 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
             }
             process.Start();
 
-            version =
-                $"System WinGet (CLI) Version: {process.StandardOutput.ReadToEnd().Trim()}";
+            string rawVersion = process.StandardOutput.ReadToEnd().Trim();
+            version = usesPingetHelper
+                ? $"Bundled Pinget CLI Version: {rawVersion}"
+                : $"System WinGet (CLI) Version: {rawVersion}";
 
-            if (usesCliHelper)
+            if (usesPingetHelper)
+                version += "\nUsing Pinget CLI helper (JSON parsing)";
+            else if (usesCliHelper)
                 version += "\nUsing WinGet CLI helper (CLI parsing)";
             else
             {
@@ -385,7 +443,7 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
                 else
                 {
                     Logger.Warn(
-                        "Attempted to reconnect to COM Server but Bundled WinGet is being used."
+                        "Attempted to reconnect to COM Server but the active backend is not native WinGet."
                     );
                 }
             }
@@ -468,7 +526,7 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
                     Arguments =
                         Status.ExecutableCallArgs
                         + " source update --disable-interactivity "
-                        + GetProxyArgument(),
+                        + GetBackendProxyArgument(),
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
@@ -496,6 +554,13 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
             logger.Close(p.ExitCode);
             p.WaitForExit();
             p.Close();
+        }
+
+        private string GetBackendProxyArgument()
+        {
+            return SelectedCliBackendKind == WinGetCliBackendKind.SystemWinGet
+                ? GetProxyArgument()
+                : "";
         }
     }
 

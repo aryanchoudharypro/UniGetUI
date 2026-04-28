@@ -56,7 +56,7 @@ internal sealed class NativeWinGetHelper : IWinGetManagerHelper
         Manager = manager;
         _systemCliHelperFactory =
             systemCliHelperFactory
-            ?? (static manager => new WinGetCliHelper(manager, manager.Status.ExecutablePath));
+            ?? (static manager => manager.CreateCliHelperForSelectedBackend());
         _localPackagesProvider = localPackagesProvider;
         _pingetPackageDetailsProvider =
             pingetPackageDetailsProvider ?? new PingetPackageDetailsProvider();
