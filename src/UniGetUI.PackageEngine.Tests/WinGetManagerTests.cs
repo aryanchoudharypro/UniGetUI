@@ -35,6 +35,8 @@ public sealed class WinGetManagerTests : IDisposable
         Settings.Set(Settings.K.EnableProxy, false);
         Settings.Set(Settings.K.EnableProxyAuth, false);
         Settings.SetValue(Settings.K.ProxyURL, "");
+        Settings.SetValue(Settings.K.WinGetCliBackendPreference, "");
+        Settings.SetValue(Settings.K.WinGetNativeApiPolicy, "");
     }
 
     public void Dispose()
@@ -171,6 +173,38 @@ public sealed class WinGetManagerTests : IDisposable
     }
 
     [Fact]
+    public void FindCandidateExecutableFilesCanPreferBundledPingetBeforeSystemWinGet()
+    {
+        const string systemWinGet = @"C:\WindowsApps\winget.exe";
+        const string bundledPinget = @"C:\Program Files\UniGetUI\pinget.exe";
+
+        var candidates = WinGet.FindCandidateExecutableFiles(
+            static executableName => executableName == "winget.exe" ? [systemWinGet] : [],
+            path => path == bundledPinget,
+            bundledPinget,
+            WinGetCliBackendPreference.PreferBundledPinget
+        );
+
+        Assert.Equal([bundledPinget, systemWinGet], candidates);
+    }
+
+    [Fact]
+    public void FindCandidateExecutableFilesCanUseBundledPingetOnly()
+    {
+        const string systemWinGet = @"C:\WindowsApps\winget.exe";
+        const string bundledPinget = @"C:\Program Files\UniGetUI\pinget.exe";
+
+        var candidates = WinGet.FindCandidateExecutableFiles(
+            static executableName => executableName == "winget.exe" ? [systemWinGet] : [],
+            path => path == bundledPinget,
+            bundledPinget,
+            WinGetCliBackendPreference.BundledPingetOnly
+        );
+
+        Assert.Equal([bundledPinget], candidates);
+    }
+
+    [Fact]
     public void FindCandidateExecutableFilesReturnsEmptyWhenNoBackendExists()
     {
         var candidates = WinGet.FindCandidateExecutableFiles(
@@ -180,6 +214,121 @@ public sealed class WinGetManagerTests : IDisposable
         );
 
         Assert.Empty(candidates);
+    }
+
+        [Fact]
+        public void PingetCliHelperDeserializesListResponsesWithGeneratedContext()
+        {
+                const string json = """
+                        {
+                            "matches": [
+                                {
+                                    "name": "Contoso Tool",
+                                    "id": "Contoso.Tool",
+                                    "localId": null,
+                                    "installedVersion": "1.2.3",
+                                    "availableVersion": "2.0.0",
+                                    "sourceName": "winget",
+                                    "publisher": null,
+                                    "scope": null,
+                                    "installerCategory": null,
+                                    "installLocation": null,
+                                    "packageFamilyNames": [],
+                                    "productCodes": [],
+                                    "upgradeCodes": []
+                                }
+                            ],
+                            "warnings": [],
+                            "truncated": false
+                        }
+                        """;
+
+                ListResponse response = PingetCliHelper.DeserializeJson<ListResponse>(json);
+
+                ListMatch match = Assert.Single(response.Matches);
+                Assert.Equal("Contoso Tool", match.Name);
+                Assert.Equal("Contoso.Tool", match.Id);
+                Assert.Equal("1.2.3", match.InstalledVersion);
+                Assert.Equal("2.0.0", match.AvailableVersion);
+                Assert.Equal("winget", match.SourceName);
+        }
+
+    [Fact]
+    public void GetCliBackendPreferenceUsesEnvironmentBeforeSettings()
+    {
+        var preference = WinGet.GetCliBackendPreference(
+            name => name == WinGet.CliBackendPreferenceEnvironmentVariable ? "pinget" : null,
+            key => key == Settings.K.WinGetCliBackendPreference ? "winget" : ""
+        );
+
+        Assert.Equal(WinGetCliBackendPreference.PreferBundledPinget, preference);
+    }
+
+    [Fact]
+    public void GetCliBackendPreferenceFallsBackToSettings()
+    {
+        var preference = WinGet.GetCliBackendPreference(
+            static _ => null,
+            key => key == Settings.K.WinGetCliBackendPreference ? "pinget-only" : ""
+        );
+
+        Assert.Equal(WinGetCliBackendPreference.BundledPingetOnly, preference);
+    }
+
+    [Fact]
+    public void GetNativeApiPolicyUsesEnvironmentBeforeSettings()
+    {
+        var policy = WinGet.GetNativeApiPolicy(
+            name => name == WinGet.NativeApiPolicyEnvironmentVariable ? "disabled" : null,
+            key => key == Settings.K.WinGetNativeApiPolicy ? "enabled" : ""
+        );
+
+        Assert.Equal(WinGetNativeApiPolicy.Disabled, policy);
+    }
+
+    [Fact]
+    public void ShouldUseNativeWinGetApiAllowsSystemBackendWhenPolicyAllowsNativeApi()
+    {
+        Assert.True(
+            WinGet.ShouldUseNativeWinGetApi(
+                WinGetCliBackendKind.SystemWinGet,
+                WinGetNativeApiPolicy.Auto
+            )
+        );
+        Assert.True(
+            WinGet.ShouldUseNativeWinGetApi(
+                WinGetCliBackendKind.SystemWinGet,
+                WinGetNativeApiPolicy.Enabled
+            )
+        );
+    }
+
+    [Fact]
+    public void ShouldUseNativeWinGetApiCanDisableComForSystemBackend()
+    {
+        Assert.False(
+            WinGet.ShouldUseNativeWinGetApi(
+                WinGetCliBackendKind.SystemWinGet,
+                WinGetNativeApiPolicy.Disabled
+            )
+        );
+    }
+
+    [Fact]
+    public void ShouldUseNativeWinGetApiNeverUsesComForBundledPingetBackend()
+    {
+        Assert.False(
+            WinGet.ShouldUseNativeWinGetApi(
+                WinGetCliBackendKind.BundledPinget,
+                WinGetNativeApiPolicy.Auto
+            )
+        );
+        Assert.False(
+            WinGet.ShouldUseNativeWinGetApi(
+                WinGetCliBackendKind.BundledPinget,
+                WinGetNativeApiPolicy.Enabled
+            )
+        );
     }
 
     [Fact]

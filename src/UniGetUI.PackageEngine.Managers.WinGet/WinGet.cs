@@ -20,6 +20,9 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
 {
     public class WinGet : PackageManager
     {
+        internal const string CliBackendPreferenceEnvironmentVariable = "UNIGETUI_WINGET_CLI";
+        internal const string NativeApiPolicyEnvironmentVariable = "UNIGETUI_WINGET_COM";
+
         public static string[] FALSE_PACKAGE_NAMES = ["", "e(s)", "have", "the", "Id"];
         public static string[] FALSE_PACKAGE_IDS =
         [
@@ -259,18 +262,37 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
             return FindCandidateExecutableFiles(
                 executableName => CoreTools.WhichMultiple(executableName),
                 File.Exists,
-                GetBundledPingetExecutablePath()
+                GetBundledPingetExecutablePath(),
+                GetCliBackendPreference()
             );
         }
 
         internal static IReadOnlyList<string> FindCandidateExecutableFiles(
             Func<string, IReadOnlyList<string>> findExecutables,
             Func<string, bool> fileExists,
-            string bundledPingetPath
+            string bundledPingetPath,
+            WinGetCliBackendPreference backendPreference = WinGetCliBackendPreference.Auto
         )
         {
-            List<string> candidates = [.. findExecutables("winget.exe")];
-            if (fileExists(bundledPingetPath))
+            IReadOnlyList<string> systemWinGetCandidates = findExecutables("winget.exe");
+            bool bundledPingetExists = fileExists(bundledPingetPath);
+
+            List<string> candidates = backendPreference switch
+            {
+                WinGetCliBackendPreference.PreferBundledPinget => bundledPingetExists
+                    ? [bundledPingetPath, .. systemWinGetCandidates]
+                    : [.. systemWinGetCandidates],
+                WinGetCliBackendPreference.BundledPingetOnly => bundledPingetExists
+                    ? [bundledPingetPath]
+                    : [],
+                _ => [.. systemWinGetCandidates],
+            };
+
+            if (
+                backendPreference is WinGetCliBackendPreference.Auto
+                    or WinGetCliBackendPreference.PreferSystemWinGet
+                && bundledPingetExists
+            )
             {
                 candidates.Add(bundledPingetPath);
             }
@@ -310,8 +332,16 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
 
             if (SelectedCliBackendKind == WinGetCliBackendKind.BundledPinget)
             {
-                Logger.Warn("System WinGet was not found; using bundled Pinget CLI fallback.");
+                Logger.Warn("Using bundled Pinget CLI backend.");
                 WinGetHelper.Instance = new PingetCliHelper(this, path);
+                return;
+            }
+
+            WinGetNativeApiPolicy nativeApiPolicy = GetNativeApiPolicy();
+            if (!ShouldUseNativeWinGetApi(SelectedCliBackendKind, nativeApiPolicy))
+            {
+                Logger.Warn("WinGet COM API usage is disabled; using WinGetCliHelper().");
+                WinGetHelper.Instance = new WinGetCliHelper(this, path);
                 return;
             }
 
@@ -341,6 +371,110 @@ namespace UniGetUI.PackageEngine.Managers.WingetManager
                 Logger.Warn("WinGet will resort to using WinGetCliHelper()");
                 WinGetHelper.Instance = CreateCliHelperForSelectedBackend();
             }
+        }
+
+        internal static WinGetCliBackendPreference GetCliBackendPreference()
+        {
+            return GetCliBackendPreference(
+                static name => Environment.GetEnvironmentVariable(name),
+                static key => Settings.GetValue(key)
+            );
+        }
+
+        internal static WinGetCliBackendPreference GetCliBackendPreference(
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? value = GetPolicyValue(
+                CliBackendPreferenceEnvironmentVariable,
+                Settings.K.WinGetCliBackendPreference,
+                getEnvironmentVariable,
+                getSettingValue
+            );
+
+            return ParseCliBackendPreference(value) ?? WinGetCliBackendPreference.Auto;
+        }
+
+        internal static WinGetNativeApiPolicy GetNativeApiPolicy()
+        {
+            return GetNativeApiPolicy(
+                static name => Environment.GetEnvironmentVariable(name),
+                static key => Settings.GetValue(key)
+            );
+        }
+
+        internal static WinGetNativeApiPolicy GetNativeApiPolicy(
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? value = GetPolicyValue(
+                NativeApiPolicyEnvironmentVariable,
+                Settings.K.WinGetNativeApiPolicy,
+                getEnvironmentVariable,
+                getSettingValue
+            );
+
+            return ParseNativeApiPolicy(value) ?? WinGetNativeApiPolicy.Auto;
+        }
+
+        private static string? GetPolicyValue(
+            string environmentVariableName,
+            Settings.K settingKey,
+            Func<string, string?> getEnvironmentVariable,
+            Func<Settings.K, string> getSettingValue
+        )
+        {
+            string? environmentValue = getEnvironmentVariable(environmentVariableName);
+            if (!string.IsNullOrWhiteSpace(environmentValue))
+            {
+                return environmentValue;
+            }
+
+            string settingValue = getSettingValue(settingKey);
+            return string.IsNullOrWhiteSpace(settingValue) ? null : settingValue;
+        }
+
+        private static WinGetCliBackendPreference? ParseCliBackendPreference(string? value)
+        {
+            return NormalizePolicyValue(value) switch
+            {
+                "auto" => WinGetCliBackendPreference.Auto,
+                "winget" or "system" or "systemwinget" or "prefersystemwinget" =>
+                    WinGetCliBackendPreference.PreferSystemWinGet,
+                "pinget" or "bundledpinget" or "preferpinget" or "preferbundledpinget" =>
+                    WinGetCliBackendPreference.PreferBundledPinget,
+                "pingetonly" or "bundledpingetonly" => WinGetCliBackendPreference.BundledPingetOnly,
+                _ => null,
+            };
+        }
+
+        private static WinGetNativeApiPolicy? ParseNativeApiPolicy(string? value)
+        {
+            return NormalizePolicyValue(value) switch
+            {
+                "auto" => WinGetNativeApiPolicy.Auto,
+                "enabled" or "enable" or "on" or "true" or "1" => WinGetNativeApiPolicy.Enabled,
+                "disabled" or "disable" or "off" or "false" or "0" => WinGetNativeApiPolicy.Disabled,
+                _ => null,
+            };
+        }
+
+        internal static bool ShouldUseNativeWinGetApi(
+            WinGetCliBackendKind backendKind,
+            WinGetNativeApiPolicy nativeApiPolicy
+        )
+        {
+            return backendKind == WinGetCliBackendKind.SystemWinGet
+                && nativeApiPolicy != WinGetNativeApiPolicy.Disabled;
+        }
+
+        private static string NormalizePolicyValue(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? ""
+                : value.Trim().Replace("-", "").Replace("_", "").ToLowerInvariant();
         }
 
         private static WinGetCliBackendKind GetBackendKind(string executablePath)

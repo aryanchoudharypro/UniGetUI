@@ -87,6 +87,8 @@ public static partial class Settings
         MinimumUpdateAgeCustom,
         PerManagerMinimumUpdateAge,
         PerManagerMinimumUpdateAgeCustom,
+        WinGetCliBackendPreference,
+        WinGetNativeApiPolicy,
 
         Test1,
         Test2,
@@ -185,6 +187,8 @@ public static partial class Settings
             K.MinimumUpdateAgeCustom => "MinimumUpdateAgeCustom",
             K.PerManagerMinimumUpdateAge => "PerManagerMinimumUpdateAge",
             K.PerManagerMinimumUpdateAgeCustom => "PerManagerMinimumUpdateAgeCustom",
+            K.WinGetCliBackendPreference => "WinGetCliBackendPreference",
+            K.WinGetNativeApiPolicy => "WinGetNativeApiPolicy",
 
             K.Test1 => "TestSetting1",
             K.Test2 => "TestSetting2",

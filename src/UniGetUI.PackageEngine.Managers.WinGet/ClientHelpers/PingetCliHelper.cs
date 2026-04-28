@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Devolutions.Pinget.Core;
 using UniGetUI.Core.Logging;
 using UniGetUI.Core.Tools;
@@ -12,12 +13,13 @@ using UniGetUI.PackageEngine.PackageClasses;
 
 namespace UniGetUI.PackageEngine.Managers.WingetManager;
 
-internal sealed class PingetCliHelper : IWinGetManagerHelper
+internal sealed partial class PingetCliHelper : IWinGetManagerHelper
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions SerializationOptions = new()
     {
         PropertyNameCaseInsensitive = true,
     };
+    private static readonly PingetCliJsonContext SerializationContext = new(SerializationOptions);
 
     private readonly WinGet Manager;
     private readonly string _cliExecutablePath;
@@ -216,8 +218,14 @@ internal sealed class PingetCliHelper : IWinGetManagerHelper
             );
         }
 
-        return JsonSerializer.Deserialize<T>(output, JsonOptions)
-            ?? throw new InvalidOperationException("Pinget returned empty JSON output.");
+        return DeserializeJson<T>(output);
+    }
+
+    internal static T DeserializeJson<T>(string output)
+    {
+        return JsonSerializer.Deserialize(output, typeof(T), SerializationContext) is T result
+            ? result
+            : throw new InvalidOperationException("Pinget returned empty JSON output.");
     }
 
     private IManagerSource GetSource(string? sourceName, string packageId)
@@ -235,4 +243,10 @@ internal sealed class PingetCliHelper : IWinGetManagerHelper
     private sealed record PingetSourcesResponse(List<PingetSourceRecord> Sources);
 
     private sealed record PingetSourceRecord(string Name, string Arg);
+
+    [JsonSerializable(typeof(ListResponse))]
+    [JsonSerializable(typeof(SearchResponse))]
+    [JsonSerializable(typeof(VersionsResult))]
+    [JsonSerializable(typeof(PingetSourcesResponse))]
+    private sealed partial class PingetCliJsonContext : JsonSerializerContext { }
 }
